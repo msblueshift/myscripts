@@ -1,0 +1,216 @@
+user cluster: admin_gama
+pwd cluster: Tomazin3001#
+
+ssh user: us_msantos
+ssh pwd: Tomazin3001#
+
+# acessando a maquina
+ssh us_msantos@hdbasemarcelo-ssh.azurehdinsight.net
+
+# entrando no shell do hbase
+
+hbase shell
+
+# criando uma tabela Stocks com os colunas Current e Closing
+
+create 'Stocks', 'Current', 'Closing'
+
+# inserindo linhas na tabela Stocks
+
+put 'Stocks', 'ABC', 'Current:Price', 97.3
+
+put 'Stocks', 'ABC', 'Closing:Price', 95.7
+
+# visualização os dados da tabelas
+
+scan 'Stocks'
+
+# inserindo uma nova coluna na tabela com dado
+
+put 'Stocks', 'ABC', 'Current:Status', 'Up'
+
+# pegando os valores da linha 'ABC'
+
+get 'Stocks', 'ABC'
+
+# inserindo novo dado na tabela Stocks -- 
+
+put 'Stocks', 'ABC', 'Current:Price', 99.1
+
+# perceba que a linha foi atualizada pelo timestamp
+
+get 'Stocks', 'ABC'
+
+
+# deletando coluna 'Status'
+
+delete 'Stocks', 'ABC', 'Current:Status'
+
+#saindo do hbase
+quit
+
+-- criando uma pasta no hdfs
+
+hdfs dfs -mkdir /user/data
+
+-- verificando se a pasta foi criada
+
+hdfs dfs -ls /user/data
+
+-- foi importado um arquivo via Microsoft Azure Store 
+
+hdfs dfs -ls /user/data
+
+resultado:
+
+us_msantos@hn0-hbasem:~$ hdfs dfs -ls /user/data
+Found 1 items
+-rwxrwxrwx   1        124 2019-09-07 18:53 /user/data/stocks.txt
+
+######################################################################################
+
+-- preparando o arquivo para ser importado (momento mapreduce) para o hbase -- unica linha
+
+hbase org.apache.hadoop.hbase.mapreduce.ImportTsv -Dimporttsv.columns="HBASE_ROW_KEY,Closing:Price,Current:Price" -Dimporttsv.bulk.output="/data/storefile" Stocks /data/stocks.txt
+
+# carregar os dados na tabela criada Stocks
+
+hbase org.apache.hadoop.hbase.mapreduce.LoadIncrementalHFiles /data/storefile Stocks
+
+# entrando no hbase
+
+hbase shell
+
+# verificando a tabela Stocks
+
+scan 'Stocks'
+
+# buscando os dados da coluna "Price"
+
+scan 'Stocks', {COLUMNS => 'Current:Price'}
+
+# limitando a consulta para três linhas
+
+scan 'Stocks', {LIMIT => 3}
+
+# buscando as linhas que tem valores entre 'C' e 'H'
+
+scan 'Stocks', {STARTROW=>'C', STOPROW=>'H'}
+
+##################################################################################################
+
+# Preparando uma interface para consumo dos dados peo Hive, armazenando os dados no hbase
+
+# chamando o shell do Hive
+
+hive
+
+# criando uma tabela no Hive mais direcionando a estrutura do hbase
+
+CREATE EXTERNAL TABLE StockPrices
+(Stock STRING,
+ClosingPrice FLOAT,
+CurrentPrice FLOAT)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+WITH SERDEPROPERTIES
+('hbase.columns.mapping' = ':key,Closing:Price,Current:Price')
+TBLPROPERTIES ('hbase.table.name' = 'Stocks');
+
+# executando um query no Hive
+
+SELECT Stock, CurrentPrice, ClosingPrice, IF(CurrentPrice > ClosingPrice, 'Up', IF (CurrentPrice < ClosingPrice, 'Down', '-')) AS Status
+FROM StockPrices
+ORDER BY Stock;
+
+resultado:
+
++--------+---------------+---------------+---------+
+| stock  | currentprice  | closingprice  | status  |
++--------+---------------+---------------+---------+
+| AAA    | 14.2          | 12.8          | Up      |
+| ABC    | 99.1          | 95.7          | Up      |
+| BBB    | 30.1          | 30.1          | -       |
+| CBA    | 120.3         | 120.3         | -       |
+| GDM    | 135.2         | 126.7         | Up      |
+| QQQ    | 12.1          | 13.2          | Down    |
+| XYZ    | 39.9          | 43.5          | Down    |
+| ZYX    | 101.4         | 101.2         | Up      |
+| ZZZ    | 32.9          | 28.4          | Up      |
++--------+---------------+---------------+---------+
+
+# saindo do hive e entrar no Hbase para alterar uma linha 
+
+put 'Stocks', 'ABC', 'Current:Price', '92.8'
+
+# Saindo do Hbase e voltando para Hive, executando a consulta anterior
+
+SELECT Stock, CurrentPrice, ClosingPrice, IF(CurrentPrice > ClosingPrice, 'Up', IF (CurrentPrice < ClosingPrice, 'Down', '-')) AS Status
+FROM StockPrices
+ORDER BY Stock;
+
+resultado:
+
++--------+---------------+---------------+---------+
+| stock  | currentprice  | closingprice  | status  |
++--------+---------------+---------------+---------+
+| AAA    | 14.2          | 12.8          | Up      |
+| ABC    | 92.8          | 95.7          | Down    |
+| BBB    | 30.1          | 30.1          | -       |
+| CBA    | 120.3         | 120.3         | -       |
+| GDM    | 135.2         | 126.7         | Up      |
+| QQQ    | 12.1          | 13.2          | Down    |
+| XYZ    | 39.9          | 43.5          | Down    |
+| ZYX    | 101.4         | 101.2         | Up      |
+| ZZZ    | 32.9          | 28.4          | Up      |
++--------+---------------+---------------+---------+
+
+note: agora o Hive considerou o status da linha ABC com Down, pois o preço de foi alterado.
+
+############################################################################################
+
+#Utilizando o phoenix como interface para criar views do Hbase 
+# para usar o phoenix é necessário uso de um driver jdbc
+
+#consultar a versão
+
+ls /usr/hdp
+
+resultado:
+
+us_msantos@hn0-hbasem:~$ ls /usr/hdp
+3.1.2.1-1  current
+
+# string de conexão no zookeeper -- ir no ambari -> zookeeper -. zookeeper server host
+
+/usr/hdp/3.1.2.1-1/phoenix/bin/sqlline.py zk0-hbasem.235wrb5aissefonjritnb4vl1a.cx.internal.cloudapp.net:2181:/hbase-unsecure
+
+# criando a view após conexão com o node do zookeeper
+
+CREATE VIEW "Stocks"
+(StockCode VARCHAR PRIMARY KEY,
+ "Closing"."Price" VARCHAR,
+ "Current"."Price" VARCHAR);
+
+ # consultando os dados do Hbase mas na visão do phoenix
+
+SELECT StockCode, "Current"."Price"
+FROM "Stocks"
+WHERE "Current"."Price" > "Closing"."Price";
+
+resultado:
+
+ : jdbc:phoenix:zk0-hbasem.235wrb5aissefonjri> SELECT StockCode, "Current"."Price"
+. . . . . . . . . . . . . . . . . . . . . . .> FROM "Stocks"
+. . . . . . . . . . . . . . . . . . . . . . .> WHERE "Current"."Price" > "Closing"."Price";
++------------+--------+
+| STOCKCODE  | Price  |
++------------+--------+
+| AAA        | 14.2   |
+| GDM        | 135.2  |
+| ZYX        | 101.4  |
+| ZZZ        | 32.9   |
++------------+--------+
+
+# sair do phoenix
+
+!exit
